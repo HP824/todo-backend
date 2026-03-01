@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -6,11 +6,10 @@ from typing import Optional, List
 import os
 from dotenv import load_dotenv
 
+# ----------------------------
+# Load environment variables
+# ----------------------------
 load_dotenv()
-
-# --------------------------------------------------
-# Config
-# --------------------------------------------------
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -18,44 +17,15 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise Exception("Supabase environment variables not set.")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+# ----------------------------
+# App & Security
+# ----------------------------
 app = FastAPI(title="Todo App API")
 security = HTTPBearer()
 
-# --------------------------------------------------
-# Health Check Endpoint
-# --------------------------------------------------
-
-@app.get("/health")
-def health_check():
-    """
-    Checks:
-    - Backend is running
-    - Supabase client is initialized
-    - Database connection works
-    """
-
-    try:
-        # Lightweight query to test DB connectivity
-        response = supabase.table("todos").select("id").limit(1).execute()
-
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "supabase_url": SUPABASE_URL
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Database connection failed: {str(e)}"
-        )
-
-# --------------------------------------------------
-# Models
-# --------------------------------------------------
-
+# ----------------------------
+# Pydantic Models
+# ----------------------------
 class TodoCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -72,66 +42,108 @@ class TodoResponse(BaseModel):
     completed: bool
     created_at: str
 
-# --------------------------------------------------
+# ----------------------------
 # Auth Dependency
-# --------------------------------------------------
-
+# ----------------------------
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
+    """
+    Returns a dict with:
+        - user: Supabase user object
+        - client: Supabase client scoped to this user's JWT
+    """
     try:
         token = credentials.credentials
+        # Create a user-scoped client
+        user_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        user_client.postgrest.auth(token)
 
-        # Create a user-scoped Supabase client
-        user_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        user_supabase.postgrest.auth(token)
+        user_resp = user_client.auth.get_user(token)
+        if not user_resp.user:
+            raise Exception("Invalid user")
 
-        user = user_supabase.auth.get_user(token)
-
-        return {
-            "user": user.user,
-            "client": user_supabase
-        }
+        return {"user": user_resp.user, "client": user_client}
 
     except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise HTTPException(status_code=401, detail=f"Auth failed: {str(e)}")
 
-# --------------------------------------------------
-# Routes
-# --------------------------------------------------
+# ----------------------------
+# Health Check Endpoint
+# ----------------------------
+@app.get("/health")
+def health_check():
+    try:
+        # Lightweight query to test DB connectivity
+        global_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        global_client.table("todos").select("id").limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
+
+# ----------------------------
+# CRUD Endpoints
+# ----------------------------
 
 @app.get("/")
 def root():
-    return {"message": "API Running"}
+    return {"message": "Todo API Running"}
 
+# Create Todo
 @app.post("/todos", response_model=TodoResponse)
 def create_todo(todo: TodoCreate, context=Depends(get_current_user)):
-
     user = context["user"]
-    client = context["client"]
+    client: Client = context["client"]
 
-    data = {
-        "user_id": user.id,
-        "title": todo.title,
-        "description": todo.description
-    }
+    data = {"user_id": user.id, "title": todo.title, "description": todo.description}
 
-    response = client.table("todos").insert(data).execute()
+    resp = client.table("todos").insert(data).execute()
+    if not resp.data:
+        raise HTTPException(status_code=400, detail="Failed to create todo")
+    return resp.data[0]
 
-    return response.data[0]
-
+# Get All Todos
 @app.get("/todos", response_model=List[TodoResponse])
 def get_todos(context=Depends(get_current_user)):
     user = context["user"]
-    client = context["client"]
+    client: Client = context["client"]
 
-    response = (
-        client
-        .table("todos")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", desc=True)
-        .execute()
-    )
+    resp = client.table("todos").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
+    return resp.data
 
-    return response.data
+# Get Single Todo
+@app.get("/todos/{todo_id}", response_model=TodoResponse)
+def get_todo(todo_id: str, context=Depends(get_current_user)):
+    user = context["user"]
+    client: Client = context["client"]
+
+    resp = client.table("todos").select("*").eq("id", todo_id).eq("user_id", user.id).single().execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return resp.data
+
+# Update Todo
+@app.put("/todos/{todo_id}", response_model=TodoResponse)
+def update_todo(todo_id: str, updates: TodoUpdate, context=Depends(get_current_user)):
+    user = context["user"]
+    client: Client = context["client"]
+
+    update_data = updates.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    resp = client.table("todos").update(update_data).eq("id", todo_id).eq("user_id", user.id).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return resp.data[0]
+
+# Delete Todo
+@app.delete("/todos/{todo_id}")
+def delete_todo(todo_id: str, context=Depends(get_current_user)):
+    user = context["user"]
+    client: Client = context["client"]
+
+    resp = client.table("todos").delete().eq("id", todo_id).eq("user_id", user.id).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return {"message": "Todo deleted successfully"}
