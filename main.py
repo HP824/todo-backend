@@ -7,9 +7,6 @@ from typing import Optional, List
 import os
 from dotenv import load_dotenv
 
-# ----------------------------
-# Load environment variables
-# ----------------------------
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -18,9 +15,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise Exception("Supabase environment variables not set.")
 
-# ----------------------------
-# App & Security
-# ----------------------------
 app = FastAPI(title="Todo App API")
 security = HTTPBearer()
 app.add_middleware(
@@ -31,9 +25,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# ----------------------------
 # Pydantic Models
-# ----------------------------
+
 class TodoCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -53,9 +46,8 @@ class TodoResponse(BaseModel):
     created_at: str
 
 
-# ----------------------------
 # Auth Dependency
-# ----------------------------
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
@@ -85,9 +77,8 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail=f"Auth failed: {str(e)}")
 
 
-# ----------------------------
 # Health Check Endpoint
-# ----------------------------
+
 @app.get("/health")
 async def health_check():
     try:
@@ -113,16 +104,14 @@ async def health_check():
         )
 
 
-# ----------------------------
 # CRUD Endpoints
-# ----------------------------
 
 @app.get("/")
 async def root():
     return {"message": "Todo API Running"}
 
 
-# Create Todo
+# Create
 @app.post("/todos", response_model=TodoResponse)
 async def create_todo(todo: TodoCreate, context=Depends(get_current_user)):
     user = context["user"]
@@ -142,7 +131,7 @@ async def create_todo(todo: TodoCreate, context=Depends(get_current_user)):
     return resp.data[0]
 
 
-# Get All Todos
+# Get All
 @app.get("/todos", response_model=List[TodoResponse])
 async def get_todos(context=Depends(get_current_user)):
     user = context["user"]
@@ -160,7 +149,7 @@ async def get_todos(context=Depends(get_current_user)):
     return resp.data
 
 
-# Get Single Todo
+# Get
 @app.get("/todos/{todo_id}", response_model=TodoResponse)
 async def get_todo(todo_id: str, context=Depends(get_current_user)):
     user = context["user"]
@@ -182,7 +171,7 @@ async def get_todo(todo_id: str, context=Depends(get_current_user)):
     return resp.data
 
 
-# Update Todo
+# Update
 @app.put("/todos/{todo_id}", response_model=TodoResponse)
 async def update_todo(todo_id: str, updates: TodoUpdate, context=Depends(get_current_user)):
     user = context["user"]
@@ -208,7 +197,7 @@ async def update_todo(todo_id: str, updates: TodoUpdate, context=Depends(get_cur
     return resp.data[0]
 
 
-# Delete Todo
+# Delete
 @app.delete("/todos/{todo_id}")
 async def delete_todo(todo_id: str, context=Depends(get_current_user)):
     user = context["user"]
