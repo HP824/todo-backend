@@ -25,7 +25,7 @@ app = FastAPI(title="Todo App API")
 security = HTTPBearer()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["https://todo-frontend-delta-eight.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
